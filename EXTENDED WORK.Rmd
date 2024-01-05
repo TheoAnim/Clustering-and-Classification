@@ -1,0 +1,1100 @@
+---
+title: "Untitled"
+author: "THEOPHILUS ANIM BEDIAKO"
+date: "2023-03-06"
+output:
+  word_document: default
+  html_document: default
+---
+
+
+#libraries
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(MASS)
+library(ellipsis)
+library(mixtools)
+library(caret)
+library("mixAK")
+library(psych)
+library(matrixcalc)
+library(caTools)
+```
+
+
+
+#EM algorithm
+
+```{r}
+
+# Loglikelihood function
+LogL <- function(gama, Pi, df, cov) {
+  N <- dim(gama)[3]
+ 
+  K <- length(Pi)
+
+  ll <- 0
+
+  for (i in 1:N) {
+    thresh <- 0
+
+    for (k in 1:K) {
+      thresh <- thresh + Pi[k] * dWISHART(gama[, , i], df, cov[, , k])
+    }
+    ll <- ll + log(thresh)
+  }
+
+  return(ll)
+}
+
+
+
+# E step
+E.step <- function(gama, Pi, df, cov) {
+  K <- length(Pi)
+
+  # df <- 5
+
+  N <- dim(gama)[3] # number of observation in the gammasample
+
+  tau <- matrix(0, nrow = N, ncol = K) # posterior probabilities
+
+  for (i in 1:N) {
+    for (k in 1:K) {
+      tau[i, k] <- Pi[k] * dWISHART(gama[, , i], df, cov[, , k])
+    }
+
+    tau[i, ] <- tau[i, ] / sum(tau[i, ])
+  }
+
+  return(tau)
+}
+
+
+# M step
+
+M.step <- function(gama, tau) {
+  K <- dim(tau)[2]
+
+  p <- dim(gama)[2]
+
+  N <- dim(gama)[3] # same as nrow(tau)
+
+  Pi <- (1 / N) * colSums(tau)
+
+  cov <- array(0, c(p, p, K))
+
+  for (k in 1:K) {
+    for (i in 1:N) {
+      cov[, , k] <- cov[, , k] + tau[i, k] * gama[, , i]
+    }
+
+    cov[, , k] <- cov[, , k] / sum(tau[, k] * df)
+  }
+
+  ID <- apply(tau, 1, which.max)
+
+  list(ID = ID, Pi = Pi, cov = cov)
+}
+
+# EM algorithm
+
+EM.algorithm <- function(gama, Pi, df, cov, tol) {
+  t <- 0
+
+  ll.old <- -Inf
+
+  ll <- LogL(gama, Pi, df, cov)
+
+  repeat{
+    t <- t + 1
+
+    if ((ll - ll.old) / abs(ll) < tol) {
+      break
+    }
+
+    ll.old <- ll
+
+    tau <- E.step(gama, Pi, df, cov)
+
+    M <- M.step(gama, tau)
+
+    Pi <- M$Pi
+
+    cov <- M$cov
+
+    ll <- LogL(gama, Pi, df, cov)
+
+    # cat("Iteration", t, "logL = ", ll, "\n")
+  }
+
+  return(list(ID = M$ID, Pi = M$Pi, Cov = M$cov, tau = tau, Logl = ll))
+}
+```
+
+
+
+
+
+
+#simulation 1
+
+
+```{r}
+set.seed(1)
+n <- 100
+df <- 10
+K <- 2
+
+pi <- c(0.45, 0.55)
+#MU <- matrix(rep(seq(0.01,2, length.out = n), each = 2), nrow = 2)
+
+MU <- rbind(runif(n, min = 0, max = 50), runif(n, min = 0, max = 50))
+
+cov1 <- matrix(c(1.42, 1.57, 1.57, 2.53), ncol =2)
+
+cov2 <- matrix(c(2.39, -1.61, -1.61, 1.57), ncol =2)
+
+Cov <- array(c(cov1, cov2), c(2,2,2))
+
+
+# sample
+gamma.samp <- array(NA, c(K, K, n))
+
+i <- 0
+
+XX <- XX2 <- NULL
+
+true.id1 <- id <- NULL
+par(mar=c(4,4,1,1))
+plot(c(-7,7), c(-7,7), type = "n", xlab = "Variable 1", ylab = "Variable 2") #create plot space
+
+for (k in 1:K) {
+  
+  for (j in 1:(n * pi[k])) {
+    i <- i + 1
+    
+    X1 <- mvrnorm(df, MU[,i], Cov[,,k]) #draw the sample 
+    #plot(X1, pch = 19, cex = 0.5)
+    #lines(ellipse(sigma = cov(X1), mu = MU[,i] ), type = "l")
+    
+    #X1bar <- apply(X1, 2, mean)
+    
+    X1bar <- t(apply(X1, 2, mean))
+    X1bar <- matrix(rep(X1bar, each = nrow(X1)), ncol = ncol(X1), byrow = F)
+    
+    
+    #points(X1-X1bar, pch = 19, cex = 0.5, col = k)
+    lines(ellipse(sigma = cov(X1-X1bar), mu=c(0,0)), col = "grey38", type = "l",  lwd = 0.2)
+    
+    gamma.samp[, , i] <- t(X1-X1bar) %*% (X1-X1bar)
+    
+    XX <- rbind(XX, X1)
+    
+    XX2 <- rbind(XX2, X1 - X1bar)
+    
+    true.id1 <- c(true.id1, k)
+    
+    id <- c(id, rep(i, df))
+  }
+}
+dev.copy2pdf(file = "covClusters.pdf")
+
+plot(XX, col = 1, pch = 19, cex = 0.5, xlab = "Variable 1", ylab = "Variable 2")
+for(i in 1:n){
+  lines(ellipse(sigma = cov(XX[id==i,]), mu = apply(XX[id==i,], 2, mean)), 
+        col = "grey38", type = "l", lwd = 0.5)
+}
+
+dev.copy2pdf(file = "class.pdf")
+#fit LDA
+
+
+#EM illustrative example 1
+EM.Results <- EM.algorithm(gamma.samp, Pi = pi, df = 10, cov = Cov, tol = 0.0000001)
+#introduce the ids from clustering covariances
+X.dat <- data.frame(XX,id = as.character(id), COVIDs = rep(EM.Results$ID, each = 10))
+
+s <- sample.split(X.dat$id, 0.7)
+X.dat.tr <- X.dat[s,-4]
+X.dat.ts <- X.dat[!s,-4]
+LDA <- lda(id~., X.dat.tr)
+
+#LDA without accounting for similar covariance structure
+pred.LDA <- predict(LDA, X.dat.ts)$class
+sum(pred.LDA == X.dat.ts$id) / nrow(X.dat.ts)
+#64%
+
+
+#QDA without accounting for similar covariance structure
+QDA <- qda(id~.,X.dat.tr)
+
+QDA.predict <- predict(QDA, X.dat.ts[,-3])$class
+mean(QDA.predict==X.dat.ts$id)
+
+
+
+
+
+
+# Fit LDA within each cluster
+set.seed(100)
+
+Training.Accu <- LOOCV1.reslts <- Test.Acc <- c()
+
+for (i in unique(X.dat$COVIDs)){
+  clust.dat <- X.dat[X.dat%in%c(i), -4]
+  
+  #for training accuracy
+  lda1 <- lda(id~., data = clust.dat)
+  pred1 <- predict(lda1, clust.dat)
+  Training.Accu[i] <- sum(pred1$class==clust.dat$id)
+}
+
+
+
+true.id1
+est.id <- true.id1 # grab this from the result of the EM algorithm
+clus1.dat <- XX[1:450, ]
+clus2.dat <- XX[451:1000, ]
+id1 <- id[1:450]
+id2 <- id[451:1000]
+
+
+
+
+# #cluster 1
+# X.dat1 <- data.frame(clus1.dat, id1 = as.character(id1))
+# X.dat1.sratio <- sample.split(X.dat1$id1, 0.7)
+# X.dat1.train <- X.dat1[X.dat1.sratio,]
+# X.dat1.test <- X.dat1[!X.dat1.sratio,]
+# 
+# LDA.train.dat1 <- lda(id1~.,X.dat1.train)
+# LDA.test.pred1 <- predict(LDA.train.dat1, X.dat1.test[,-3])
+# 
+# #82.2%
+# 
+# #cluster 2
+# X.dat2 <- data.frame(clus2.dat, id2 = as.factor(id2))
+# X.dat2.sratio <- sample.split(X.dat2$id2, 0.7)
+# X.dat2.train <- X.dat2[X.dat2.sratio,]
+# X.dat2.test <- X.dat2[!X.dat2.sratio,]
+# 
+# 
+# LDA.train.dat2 <- lda(id2~.,X.dat2.train)
+# LDA.test.pred2 <- predict(LDA.train.dat2, X.dat2.test[,-3])
+# #89.1%
+
+(sum(LDA.test.pred1$class==X.dat1.test$id1)+ sum(LDA.test.pred2$class==X.dat2.test$id2))/(nrow(X.dat1.test) + nrow(X.dat2.test) )
+#overall cluster based LDA prediction accuracy - 81.6%
+
+
+
+#not splitting into training and testing
+LDA1 <- lda(id1~., X.dat1)
+LDA2 <- lda(id2~., X.dat2)
+
+pred.LDA1 <- predict(LDA1, X.dat1)$class
+pred.LDA2 <- predict(LDA2, X.dat2)$class
+
+(sum(pred.LDA1 == X.dat1$id1) + sum(pred.LDA2 == X.dat2$id2))  /
+  (length(pred.LDA1)+ length(pred.LDA2))
+#Training accuracy - 86.8%
+
+#Leave one out Cross Validation
+# LDA1 <- lda(id1~., X.dat1, CV = T)$class
+# LDA2 <- lda(id2~., X.dat2, CV = T)$class
+# (sum(LDA1 == X.dat1$id1) + sum(LDA2 == X.dat2$id2))  / 
+#   (nrow(X.dat1)+ nrow(X.dat2))
+
+
+
+
+
+
+
+```
+
+
+
+#simulation 2
+```{r}
+set.seed(1)
+n <- 180
+df <- 50
+K <- 3
+
+pi <- c(1 / 3, 1 / 3, 1 / 3)
+
+MU <- rbind(runif(n, min = 0, max = 100), runif(n, min = 0, max = 100))
+
+
+cov1 <- matrix(c(1.42, 1.57, 1.57, 2.53), ncol = 2)
+
+cov2 <- matrix(c(2.39, -1.61, -1.61, 1.57), ncol = 2)
+
+cov3 <- matrix(c(1, 0, 0, 0.2), 2, 2)
+
+
+# cov1 <- Mix.for.EM$S[,,1]
+# cov2 <- Mix.for.EM$S[,,2]
+# cov3 <- Mix.for.EM$S[,,3]
+
+Cov <- array(c(cov1, cov2, cov3), c(2, 2, 3))
+
+
+# sample
+gamma.samps <- array(NA, c(2, 2, n))
+
+i <- 0
+
+XXX <- XX3 <- NULL
+
+true.id1 <- id <- NULL
+
+plot(c(-7, 7), c(-7, 7), type = "n", xlab = "Variable 1", ylab = "Variable 2")
+Colors <- c("greenyellow", "black", "lightcoral")
+
+for (k in 1:K) {
+  for (j in 1:(n * pi[k])) {
+    i <- i + 1
+
+    X1 <- mvrnorm(n = df, mu = MU[, i], Sigma = Cov[, , k])
+
+    X1bar <- t(apply(X1, 2, mean))
+
+    X1bar <- matrix(rep(X1bar, each = nrow(X1)), ncol = ncol(X1), byrow = F)
+
+    lines(ellipse(sigma = cov(X1 - X1bar), mu = c(0, 0)), col = Colors[k], type = "l", lwd = 0.2)
+
+    gamma.samps[, , i] <- t(X1 - X1bar) %*% (X1 - X1bar)
+
+    XXX <- rbind(XXX, X1)
+
+    XX3 <- rbind(XX3, X1 - X1bar)
+
+
+    true.id1 <- c(true.id1, k)
+
+    id <- c(id, rep(i, df))
+  }
+}
+
+dev.copy2pdf(file = "3covClusters.pdf")
+
+
+plot(XXX, col = 1, pch = 19, cex = 0.01, xlab = "Variable 1", ylab = "Variable 2")
+for (i in 1:n) {
+  lines(ellipse(sigma = cov(XXX[id == i, ]), mu = apply(XXX[id == i, ], 2, mean)), col = Colors[true.id1[i]], type = "l", lwd = 0.5)
+}
+
+dev.copy2pdf(file = "3class.pdf")
+
+
+
+```
+
+
+```{r}
+set.seed(1)
+# using the entire data
+Xdat <- data.frame(XXX, id = as.character(id))
+
+#Training accuracy
+Lda <- lda(id~., Xdat)
+Lda.pred <- predict(Lda, Xdat)
+mean(Lda.pred$class==Xdat$id)
+
+Qda <- qda(id~., Xdat)
+Qda.pred <- predict(Qda, Xdat)
+mean(Qda.pred$class==Xdat$id)
+
+
+#LOCV
+LDA.model <- lda(id ~ ., Xdat[,-3], CV=T)
+mean(LDA.model$class==id)
+#87.6
+
+QDA.model <- qda(id ~ ., Xdat[,-3], CV=T)
+mean(QDA.model$class==id)
+#qda
+#92.2
+
+# split data into 2/3 training and 1/3 testing
+# rows to sample
+rw.samps <- sample.split(Xdat$id, 0.7)
+train.set <- Xdat[rw.samps, ]
+test.set <- Xdat[!rw.samps,]
+# LDA model
+lda.model <- lda(id ~ ., data = train.set)
+pred.lda <- predict(lda.model, test.set[, -3])
+mean(pred.lda$class == test.set$id)
+# 88 % accuracy
+
+#changed to qda to get this results
+#qda: 92.7%
+
+
+# EM algorithm
+# tau = posterior probability
+tau <- E.step(gamma.samps, pi, df, Cov)
+
+# check M step
+M <- M.step(gamma.samps, tau)
+
+
+# EM algorithm
+EM.out <- EM.algorithm(gamma.samps, pi, df, Cov, tol = 0.00001)
+
+# results from EM algorithm
+id.est <- EM.out$ID
+
+Xdat.new <- data.frame(Xdat, CovIDs = rep(EM.out$ID, each = df))
+
+
+Acc.Cnt <-No.test <- LOOCV_res <-  Training.Acc <-  c()
+
+for (i in unique(Xdat.new$CovIDs)){
+C1.dat <- Xdat.new[Xdat.new$CovIDs==i, -4]
+S.R <- sample.split(C1.dat$id, 0.7)
+C1.train.dat <- C1.dat[S.R,]
+C1.test.dat <- C1.dat[!S.R,]
+
+lda.model <- lda(id~., data = C1.train.dat)
+
+Pred <- predict(lda.model, newdata = C1.test.dat)$class
+
+Acc.Cnt <- c(Acc.Cnt, sum(Pred == C1.test.dat$id))
+No.test <- c(No.test, nrow(C1.test.dat))
+
+#LOOCV
+LDA.MODEL <- lda(id~., C1.dat, CV=T)
+LOOCV_res[i] <- sum(LDA.MODEL$class==C1.dat$id)
+
+#full data
+LDA.Mod <- lda(id~.,C1.dat)
+LDA.Pred <- predict(LDA.Mod, C1.dat)
+Training.Acc[i] <- sum(LDA.Pred$class==C1.dat$id)
+
+}
+
+
+#Training accuracy-cluster based LDA
+sum(Training.Acc)/nrow(Xdat.new)
+
+#splitting - cluster-based LDA accuracy
+sum(Acc.Cnt)/sum(No.test)
+#98.5 overall accuracy
+
+
+#LOOCV cluster-based LDA accurcy
+sum(LOOCV_res)/nrow(Xdat.new)
+#0.9825556
+
+
+#Trainining accuracy
+
+# fit within cluster LDA
+Cluster.1.dat <- data.frame(XXX[1:3000, ], id1 = as.character(id[1:3000]))
+Cluster.2.dat <- data.frame(XXX[3001:6000, ], id2 = as.character(id[3001:6000]))
+Cluster.3.dat <- data.frame(XXX[6001:9000, ], id3 = as.character(id[6001:9000]))
+
+# rows for training
+samps.tr <- sort(sample(3000, size = 2100, replace = F))
+
+# cluster based LDA
+cl.1.training.set <- Cluster.1.dat[samps.tr, ] # training set
+cl.2.training.set <- Cluster.2.dat[samps.tr, ]
+cl.3.training.set <- Cluster.3.dat[samps.tr, ]
+cl.1.testing.set <- Cluster.1.dat[-samps.tr, ] # testing set
+cl.2.testing.set <- Cluster.2.dat[-samps.tr, ]
+cl.3.testing.set <- Cluster.3.dat[-samps.tr, ]
+
+# models
+lda.cluster.1 <- lda(id1 ~ ., data = cl.1.training.set)
+lda.cluster.2 <- lda(id2 ~ ., data = cl.2.training.set)
+lda.cluster.3 <- lda(id3 ~ ., data = cl.3.training.set)
+
+
+# predict and check accuracy
+pred.cl.1.lda <- predict(lda.cluster.1, cl.1.testing.set[, -3])
+pred.cl.2.lda <- predict(lda.cluster.2, cl.2.testing.set[, -3])
+pred.cl.3.lda <- predict(lda.cluster.3, cl.3.testing.set[, -3])
+
+#this should match(close) the results in the for loop above
+mean(c(pred.cl.1.lda$class == cl.1.testing.set$id1, pred.cl.2.lda$class == cl.2.testing.set$id2, pred.cl.3.lda$class == cl.3.testing.set$id3))
+
+```
+
+
+
+#Initialization
+
+```{r}
+
+# Frobenius Norm
+Frob.Norm <- function(gamma.sample, center) {
+  set.seed(1)
+
+  return(sqrt(tr((gamma.sample - center) %*% t(gamma.sample - center))))
+}
+
+# Frob.Norm(gamma.samps[,,109], gamma.samps[,,52])
+
+Dist.fxn <- function(gamma.samps, K) {
+  
+  N <- dim(gamma.samps)[3] # Number of observations
+
+  Tau <- matrix(0, nrow = N, ncol = K)
+
+  Distance <- matrix(NA, nrow = N, ncol = K) # matrix to store distance
+
+  indices <- sample(1:N, size = K, replace = F) # indexes to sample from the gammas
+
+  Ksamples <- gamma.samps[, , indices] # K samples
+
+  for (k in 1:K) {
+
+    # evaluate the distance
+    for (i in 1:N) {
+      Distance[i, k] <- Frob.Norm(gamma.sample = gamma.samps[, , i], center = Ksamples[, , k])
+    }
+  }
+
+
+  # IDs based on minimum distance
+
+  for (i in 1:N) {
+    min.index <- which.min(Distance[i, ])
+
+    Tau[i, min.index] <- 1
+  }
+
+  return(list(Distance = Distance, TauIDs = Tau))
+}
+
+
+# A <- Dist.fxn(gamma.samps, 3)
+
+# colSums(A$TauIDs)/150
+```
+
+
+```{r}
+set.seed(1)
+# df - degree of fredoom
+
+# Parameter
+
+Pars.estimate <- function(gamma.samps, K, df) {
+  p <- dim(gamma.samps[, , 1])[1] # choose one gamma to find p
+
+  N <- dim(gamma.samps)[3] # No of observations
+
+  output <- Dist.fxn(gamma.samps, K)
+
+  Pi <- colSums(output$TauIDs) / N # mixing proportions
+
+  TauIDs <- output$TauIDs
+
+  cov.ests <- array(0, c(p, p, K))
+
+  for (k in 1:K) {
+    for (i in 1:N) {
+      cov.ests[, , k] <- cov.ests[, , k] + TauIDs[i, k] * gamma.samps[, , i]
+    }
+
+    cov.ests[, , k] <- cov.ests[, , k] / (sum(TauIDs[, k]) * df) # similar to the M step in the EM algorithm
+  }
+
+  list(TauIDs = TauIDs, Pi = Pi, cov.ests = cov.ests)
+}
+
+
+# df is known in this method
+# Pa <- Pars.estimate(gamma.samps, K=3, df)
+
+# apply(Pa$TauIDs, 1, which.max)
+
+
+
+```
+
+
+
+
+#Likelihood fxn
+
+```{r}
+# Likelihood fxn for the RndEM Wishart Initilization, takes in one more input, K
+LogLikeli <- function(gama, Pi, df, cov, K) {
+  N <- dim(gama)[3]
+
+  # K <- length(Pi)
+
+  ll <- 0
+
+  for (i in 1:N) {
+    thresh <- 0
+
+    for (k in 1:K) {
+      thresh <- thresh + Pi[k] * dWISHART(gama[, , i], df, cov[, , k])
+    }
+    ll <- ll + log(thresh)
+  }
+
+  return(ll)
+}
+
+#Test function
+# LogLikeli(gamma.samps,Pi = Pa$Pi,  df=10, cov= Pa$cov.ests, K = 3)
+```
+
+#Wishart.Init
+
+```{r}
+
+# M = number of iterations
+# K=3
+
+Wishart.Init <- function(gamma.samps, K, M, df) {
+  set.seed(300)
+  llik <- rep(0, M)
+
+  par <- NULL
+
+  bestP <- NULL
+
+  for (i in 1:M) {
+    Par <- Pars.estimate(gamma.samps, K, df)
+
+    if (i == 1) {
+      bestP <- Par
+
+      llik[i] <- LogLikeli(gamma.samps, Pi = Par$Pi, df, cov = Par$cov.ests, K)
+
+      llMax <- llik[i]
+    }
+
+    if (i >= 2) {
+      llik[i] <- LogLikeli(gamma.samps, Pi = Par$Pi, df, cov = Par$cov.ests, K)
+
+      if (llik[i] >= llMax) {
+        bestP <- Par
+        llMax <- llik[i]
+      }
+    }
+    # cat(Par$Pi, bestP$Pi, "loglik = ", llMax, "\n")
+  }
+
+  return(list(TauIDs = bestP$TauIDs, Pi = bestP$Pi, Cov.Est = bestP$cov.ests, llMax <- llMax))
+}
+
+
+#Wishart.Init(gamma.samp, K = 2, M=100, df= 10)
+```
+
+
+
+
+#Apply on real data
+
+```{r}
+# import the glass data
+glass <- readRDS("glass.rds")
+
+glass.dat1 <- glass[, -2] # get rid of the fragement column
+```
+
+
+```{r}
+#  List <- unique(glass.dat1$item)
+# for (i in 1:length(List)){
+#   print(mvnorm.etest(glass.dat1[glass.dat1$item==List[i],-1],R = 100))
+# }
+```
+
+
+
+```{r}
+set.seed(1)
+
+# a function to store list of the covariance matrix as arrays
+# to be used in the second order cross product matrix generation function
+#df here means data
+array.stor.fxn <- function(xlist, df) {
+  
+  array.stor <- array(NA, dim = c(7, 7, 200)) # there are 200 7 by 7 cross product matrices
+
+  for (i in 1:length(xlist)) {
+    
+    mat <- matrix(unlist(xlist[i]), 7, 7) # form a matrix of p by p dimension
+
+    array.stor[, , i] <- mat
+  }
+
+  return(array.stor)
+}
+
+
+
+# function to obtain the gammas from the data
+gamma.fnx <- function(df) {
+  
+  groups <- unique(df[, 1]) # window
+
+  gam.samp <- list() # to store the covariance matrices
+
+  for (g in groups) {
+    
+    df.group <- scale(df[df[, 1] == g, -1]) # transform the data to have 0 means
+    
+    gam.samp[[as.character(g)]] <- t(df.group) %*% (df.group) # compute the cross product matrix
+  }
+
+  array.mats <- array.stor.fxn(gam.samp, df)
+
+  return(array.mats)
+}
+
+c.p.mats <- gamma.fnx(glass.dat1)
+# 200 gamma samples
+
+
+
+# remove matrices that are not positive definite
+#c.p.mats1 <- c.p.mats[, , -c(11,12, 18, 90, 129, 133)]
+
+c.p.mats1 <- c.p.mats[, , -c(12, 18, 90, 133)]
+#
+# for (i in 1:200){
+#
+#   print((is.positive.definite(c.p.mats[,,i])))
+# }
+
+```
+
+
+
+
+#BIC 
+```{r}
+
+Wishart.BIC <- function(gamma.samps, LogLikeli, K) {
+  N <- dim(gamma.samps)[3] # No of obs
+  p <- dim(gamma.samps[, , 1])[2] # number of variables
+  M <- K - 1 + K * (p * (p + 1) / 2 + 0) # change 1 to 0 (0 to 1) if nk is already known(unknown)
+  return(-2 * LogLikeli + M * log(N))
+}
+```
+
+
+
+
+
+
+#Test BIC function on the gamma samps(simulated data) data - has 3 components
+
+```{r}
+set.seed(1)        
+BIC.results <- c()
+
+
+for (K in c(2:10)) {
+  
+  Inits <- Wishart.Init(gamma.samps, K = K, M = 100, df = 50) 
+  
+  EM.outputs <- EM.algorithm(gamma.samps, Pi = Inits$Pi, cov = Inits$Cov, df = 50, tol = 0.000001)
+  
+  Maxlik <- EM.outputs$Logl
+  
+  BIC.output <- Wishart.BIC(gamma.samps, LogLikeli = Maxlik, K)
+  
+  BIC.results <- rbind(BIC.results, c(K, BIC.output))
+}
+
+# Gives me 3 component
+BIC.results <- data.frame(BIC.results)
+
+colnames(BIC.results) <- c("K", "BIC")
+
+
+plot(BIC.results$K, BIC.results$BIC, ylab = "BIC Values", xlab = "Number of Components", type = "b", pch = 19, col = "red", main = "")
+
+dev.copy2pdf(file = "3Components")
+
+
+```
+
+
+
+
+
+#Test BIC function on the gamma samp(simulated data) data - has two components 
+#gamma.samp data came from the Wishart file
+
+```{r}
+set.seed(1)
+BIC.results <- c()
+
+
+for (K in c(2:10)) {
+  Inits <- Wishart.Init(gamma.samp, K = K, M = 100, df = 10) #initialize
+
+  EM.outputs <- EM.algorithm(gamma.samp, Pi = Inits$Pi, cov = Inits$Cov, df = 10, tol = 0.000001) #perforn EM
+  Maxlik <- EM.outputs$Logl #choose max from EM
+  BIC.output <- Wishart.BIC(gamma.samp, LogLikeli = Maxlik, K) #compute BICs for different Ks
+  BIC.results <- rbind(BIC.results, c(K, BIC.output))
+}
+
+
+BIC.results <- data.frame(BIC.results)
+
+colnames(BIC.results) <- c("K", "BIC")
+
+
+plot(BIC.results$K, BIC.results$BIC, ylab = "BIC Values", xlab = "Number of Components", type = "b", pch = 19, col = "blue", main = "")
+
+#dev.copy2pdf(file = "2Components")
+#this gives two components - correct
+```
+
+
+
+#Choose the Best K for the glass data
+
+```{r}
+set.seed(8)
+BIC.results <- c()
+
+
+for (K in c(2:15)) {
+  Inits <- Wishart.Init(c.p.mats1, K = K, M = 100, df = 12)
+  EM.outputs <- EM.algorithm(c.p.mats1, Pi = Inits$Pi, cov = Inits$Cov, df = 12, tol = 0.000001)
+  Maxlik <- EM.outputs$Logl
+  BIC.output <- Wishart.BIC(c.p.mats1, LogLikeli = Maxlik, K)
+  BIC.results <- rbind(BIC.results, c(K, BIC.output))
+}
+
+
+BIC.results <- data.frame(BIC.results)
+
+colnames(BIC.results) <- c("K", "BIC")
+
+plot(BIC.results$K, BIC.results$BIC, ylab = "BIC Values", xlab = "Number of Components", type = "b", pch = 19, col = ("green"), main = "")
+
+dev.copy2pdf(file = "GlassBIC")
+
+
+#so far this is fluctuating between 10 and 8
+#best solution is K = 7
+K <- 8
+Inits <- Wishart.Init(c.p.mats1, K = K, M = 100, df = 12)
+EM.outputs <- EM.algorithm(c.p.mats1, Pi = Inits$Pi, cov = Inits$Cov, df = 12, tol = 0.000001)
+
+```
+
+
+
+
+
+
+#Looking for a way to select observations(windows) with positive definite cp matrices
+
+
+```{r}
+set.seed(1)
+
+glass$item <- as.character(glass$item)
+
+# removed.obs <-  glass[glass$item %in% c("s11","s12", "s18", "s90", "s129", "s133"),] # 48+12 observations removed
+# 
+# 
+# new.glass.dat <- glass[!glass$item %in% c("s11","s12", "s18", "s90", "s129","s133"),] #get observations with associated positive definite cp matrices - we now have 2352-12 obs ready to fit the within class LDA
+# 
+#s129
+removed.obs <-  glass[glass$item %in% c("s12", "s18", "s90", "s129","s133"),] # 48 observations removed
+
+new.glass.dat <- glass[!glass$item %in% c("s12", "s18", "s90", "s129", "s133"),] #get observations with associated positive definite cp matrices - we now have 2352 obs ready to fit the within class LDA
+
+
+new.glass.dat <- data.frame(new.glass.dat, ID = rep(EM.outputs$ID, each = 12)) #introduce IDs from performing EM on the cp matrices
+
+
+#fit within class LDA
+
+accuracy.cnt <- 0
+accuracy <- Correct.Pred <- c()
+No.test.obs <- 0
+
+for (i in unique(new.glass.dat$ID)){
+  #subset data based on unique IDs
+  obs.within.cluster <- new.glass.dat[new.glass.dat$ID%in%c(i),]
+  #obs.within.cluster$item <- as.character(obs.within.cluster$item)
+  
+  
+  #split data into training and testing
+  split.ratio <-  sample.split(obs.within.cluster$item, SplitRatio = 0.7)
+  train.set <- obs.within.cluster[split.ratio,] # we now have equal number of obs in each class
+  test.set <- obs.within.cluster[!split.ratio,]
+  No.test.obs <- No.test.obs + (nrow(test.set)) #count no of test obs in each iteration
+  
+  #fit model
+  lda.model <- lda(item~., data = train.set[,-c(2,10)])
+  
+  #check prediction
+  pred.lda <- predict(lda.model, newdata = test.set)
+  accuracy.cnt <- accuracy.cnt + sum(pred.lda$class==test.set$item)
+  accuracy[i] <- mean(pred.lda$class==test.set$item)
+  
+
+  #using all the data
+  LDA.Model <- lda(item~., data= obs.within.cluster[, -c(2,10)])
+  LDA.pred <- predict(LDA.Model, data = obs.within.cluster)
+  Correct.Pred[i] <- sum(LDA.pred$class == obs.within.cluster$item)
+  #print(sum(LDA.pred$class == obs.within.cluster$item)/nrow(obs.within.cluster))
+}
+
+#no split and testing - cluster-based LDA accuracy
+sum(Correct.Pred)/nrow(new.glass.dat) # - 9=79.3%
+
+
+accuracy.cnt  # count number of correct predictions
+accuracy # within class prediction accuracy 
+No.test.obs # no of observations for the test obs for  all iteration
+
+# K = 7
+#overall prediction accuracy = 83%
+
+#overall prediction accuracy when K = 8
+accuracy.cnt/No.test.obs # - 73.9%
+
+
+
+#overall prediction accuracy when K =10, 77.4%
+
+#when K = 10
+#ID = 1, 92%
+#ID = 2, 55%
+#ID = 3, 74%
+#ID =4, 63%
+#ID =5, 93%
+#ID =6, 83%
+#ID =7, 83%
+#ID =8, 95% 
+#ID = 9, 70%
+#ID = 10, 68.6%
+
+
+
+#out of curiosity, I attempted  K = 20
+#  K = 20, 85.7%
+
+
+
+
+#Fit LDA, QDA on original data without accounting for similar covariance structures
+Spl.Ratio <- sample.split(new.glass.dat$item, 0.7)
+Train.Set <- new.glass.dat[Spl.Ratio, -2]
+Test.Set <- new.glass.dat[!Spl.Ratio, -2]
+
+
+ori.lda <- lda(item~., data = Train.Set[, -c(9)])
+lda.prediction <- predict(ori.lda, newdata = Test.Set)$class
+mean(lda.prediction==Test.Set$item)
+#38.5 prediction accuracy - ordinary LDA on the split and training
+
+
+#few observations so QDA fails
+# ori.qda <- qda(item~., data = Train.Set[, -9])
+# qda.prediction <- predict(ori.qda, newdata = Test.Set[,-9])$class
+# mean(qda.prediction==Test.Set$item)
+
+#rank deficiency in group s10
+#rank deficiency in group s11
+#rank deficiency in group s110
+
+
+
+
+#Do not Split data
+glass.dat2 <- new.glass.dat[,-c(2,10)]
+
+#glass.dat2 <- glass.dat2[!glass.dat2$item%in%"s129",] #how we are dropping this extra observations does not make sense to me - cov not invertible - removed cos cp not positive definite
+
+ori.lda <- lda(item~., data = glass.dat2)
+lda.prediction <- predict(ori.lda, newdata = glass.dat2)$class
+mean(lda.prediction==glass.dat2$item)
+#42.00%
+
+
+
+ori.qda <- qda(item~., data = glass.dat2)
+qda.prediction <- predict(ori.qda, newdata = glass.dat2)$class
+mean(qda.prediction==glass.dat2$item)
+#91.92%
+#I will suspect over-fitting here - typical problem when you train and test using the same set of data
+
+
+
+#do leave one out cross validation
+
+LOOCV.LDA.results <- c()
+K.Fold <- c()
+No.Obs <- c()
+for (i in unique(new.glass.dat$ID)){
+  #subset data based on unique IDs
+  obs.within.cluster <- new.glass.dat[new.glass.dat$ID%in%c(i),]
+
+  K.fold <- 6
+  Ctrl <- trainControl(method = "cv", number = K.fold)
+  Lda_Model <- train(item~., data = obs.within.cluster[,-10], method = "lda", trControl=Ctrl)
+  
+  K.Fold[i] <-   Lda_Model$results[,2] 
+
+  
+ LOOCV.Lda <- lda(item~., data = obs.within.cluster[, -c(2,10)], CV = T)$class
+ 
+ LOOCV.LDA.results[i] <- sum( LOOCV.Lda==obs.within.cluster$item)
+
+ No.Obs[i] <- dim(obs.within.cluster)[1]
+}
+
+
+sum(LOOCV.LDA.results)/sum(No.Obs)
+#82.7%
+
+
+
+#LOOCV on the data
+LOOCV.ori.lda <- lda(item~., data = glass.dat2, CV=T)$class
+mean(LOOCV.ori.lda==glass.dat2$item)
+
+#37.5% accuracy
+
+
+LOOCV.ori.qda <- qda(item~., data = glass.dat2, CV=T)$class
+mean(LOOCV.ori.qda==glass.dat2$item, na.rm = TRUE) #
+#0.5940975
+
+#some NA in here that I do not know where it is coming from
+#there are not even NAs in the data
+
+#Kfold
+
+k.fold <- 6
+ctrl <- trainControl(method = "cv", number = k.fold)
+lda_model <- train(item~., data = glass.dat2, method = "lda", trControl=ctrl)
+
+#38.7%
+
+
+
+
+#when does QDA really become poor
+
+
+```
+
+
+
